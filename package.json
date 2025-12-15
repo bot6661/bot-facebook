@@ -1,0 +1,45 @@
+[
+  {
+    "key": "datr",
+    "value": "pFw_aUoDuumAGY1O9plRR2p5",
+    "expires": "2027-01-17T05:41:27.890Z",
+    "domain": ".facebook.com",
+    "path": "/",
+    "hostOnly": false,
+    "creation": "2024-12-15T10:00:00.000Z",
+    "lastAccessed": "2024-12-15T10:00:00.000Z"
+  },
+  {
+    "key": "sb",
+    "value": "pFw_aTmYnZp-dsBZxecxnPeQ",
+    "expires": "2027-01-17T01:17:46.854Z",
+    "domain": ".facebook.com",
+    "path": "/",
+    "hostOnly": false,
+    "creation": "2024-12-15T10:00:00.000Z",
+    "lastAccessed": "2024-12-15T10:00:00.000Z"
+  },
+  {
+    "key": "c_user",
+    "value": "61585389770260",
+    "expires": "2026-12-13T01:17:46.854Z",
+    "domain": ".facebook.com",
+    "path": "/",
+    "hostOnly": false,
+    "creation": "2024-12-15T10:00:00.000Z",
+    "lastAccessed": "2024-12-15T10:00:00.000Z"
+  },
+  {
+    "key": "xs",
+    "value": "5%3AMJrhDEPq7i884w%3A2%3A1765760265%3A-1%3A-1",
+    "expires": "2026-12-13T01:17:46.855Z",
+    "domain": ".facebook.com",
+    "path": "/",
+    "hostOnly": false,
+    "creation": "2024-12-15T10:00:00.000Z",
+    "lastAccessed": "2024-12-15T10:00:00.000Z"
+  },
+  {
+    "key": "locale",
+    "value": "th_TH",
+    "expires": "2025-12-21T05:51:45.715Z",
