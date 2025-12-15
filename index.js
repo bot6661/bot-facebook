@@ -1,4 +1,4 @@
-const chalk = require("chalk");
+hereconst chalk = require("chalk");
 const fs = require('fs');
 const axios = require("axios");
 const jimp = require("jimp-compact");
