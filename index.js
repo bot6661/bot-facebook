@@ -1,40 +1,24 @@
+const chalk = require("chalk");
 const fs = require('fs');
-let login = require("fca-unofficial");
 const axios = require("axios");
 const jimp = require("jimp-compact");
-const Jimp = require("jimp");
 const qrcode = require("qrcode-reader");
-const express = require('express'); // เพิ่มบรรทัดนี้
+
+const keepAlive = require("./server.js");
 
 console.clear();
 process.env.TZ = "Asia/Bangkok";
 
-// Banner
-console.log("\n=================================================");
-console.log("        BOT FREE REDEEM TRUEMONEY (FB)");
-console.log("=================================================\n");
+console.log(chalk.cyan("\n===== bot free redeem discord =====\n"));
 
-// ⭐ เพิ่มส่วน Express Server สำหรับ Render
-const app = express();
-const PORT = process.env.PORT || 3000;
+// อ่าน token และ phone จาก Environment Variables
+const phone = process.env.PHONE || "0959426013";
+const discordToken = process.env.DISCORD_TOKEN;
 
-app.get('/', (req, res) => {
-  res.send(`
-    <html>
-      <head><title>TrueMoney Bot</title></head>
-      <body style="font-family: Arial; padding: 20px;">
-        <h1>🟢 Bot is Running!</h1>
-        <p>TrueMoney Redeem Bot is active</p>
-        <p>Phone: 0959426013</p>
-        <p>Status: Online</p>
-      </body>
-    </html>
-  `);
-});
-
-app.listen(PORT, () => {
-  console.log(`[SERVER] Running on port ${PORT}`);
-});
+if (!discordToken) {
+    console.error(chalk.red("Error: DISCORD_TOKEN ไม่ถูกตั้งค่า!"));
+    process.exit(1);
+}
 
 // ฟังก์ชันดึงรูปภาพจาก URL
 async function getImageFromURL(url) {
@@ -53,10 +37,8 @@ async function decodeQRFromImage(imageBuffer) {
         const qr = new qrcode();
         const result = await new Promise((resolve, reject) => {
             qr.callback = (err, value) => {
-                if (err) {
-                    reject(err);
-                }
-                resolve(value);
+                if (err) reject(err);
+                else resolve(value);
             };
             qr.decode(image.bitmap);
         });
@@ -68,175 +50,167 @@ async function decodeQRFromImage(imageBuffer) {
 
 // Class สำหรับจัดการ Voucher
 class Voucher {
-    constructor(phone) {
-        this.phone = phone;
-    }
-
+    constructor(phone) { this.phone = phone; }
     getQrCode(text) {
-        if (!text) return null;
         const regex = /v=([a-zA-Z0-9]+)/;
         const match = text.match(regex);
-        if (match) {
-            return match[1];
-        }
-        return null;
+        return match ? match[1] : null;
     }
-
-    isSuccess(status) {
-        return status == "SUCCESS";
-    }
-
+    isSuccess(status) { return status === "SUCCESS"; }
     async redeem(voucherCode) {
-        const url = "https://discord.gg/cybersafe/topup/angpaofree/before/" + voucherCode + '/' + this.phone;
+        const url = `https://discord.gg/cybersafe/topup/angpaofree/before/${voucherCode}/${this.phone}`;
         try {
             const response = await axios.get(url);
             const data = response.data;
-            if (this.isSuccess(data.status.message)) {
-                return {'error': false, 'data': data};
-            }
-            return {'error': true, 'data': data};
+            if (this.isSuccess(data.status.message)) return { error: false, data };
+            return { error: true, data };
         } catch (error) {
-            return {'error': true, 'data': error};
+            return { error: true, data: error };
         }
     }
 }
 
-// ฟังก์ชันปิดโปรแกรม
-async function cleanupAndExit(code) {
-    console.log("[EXIT] กำลังปิดโปรแกรม...");
-    process.exit(code);
+// Class สำหรับจัดการ Discord Client
+class DiscordClient {
+    constructor(token) {
+        this.token = token;
+        this.gatewayUrl = 'wss://gateway.discord.gg/?v=10&encoding=json';
+        this.ws = null;
+        this.heartbeatInterval = null;
+        this.sessionId = null;
+        this.sequence = null;
+    }
+
+    connect(messageHandler) {
+        const WebSocket = require('ws');
+        this.ws = new WebSocket(this.gatewayUrl);
+
+        this.ws.on('open', () => console.log(chalk.green('เชื่อมต่อ Discord Gateway สำเร็จ')));
+
+        this.ws.on('message', (data) => {
+            const payload = JSON.parse(data);
+            const { op, d, s, t } = payload;
+            if (s) this.sequence = s;
+
+            switch (op) {
+                case 10:
+                    this.startHeartbeat(d.heartbeat_interval);
+                    this.identify();
+                    break;
+                case 0:
+                    this.handleDispatch(t, d, messageHandler);
+                    break;
+            }
+        });
+
+        this.ws.on('close', (code, reason) => {
+            console.log(chalk.red(`Discord ตัดการเชื่อมต่อ: ${code} - ${reason}`));
+            clearInterval(this.heartbeatInterval);
+            setTimeout(() => this.connect(messageHandler), 5000);
+        });
+
+        this.ws.on('error', (error) => console.error(chalk.red('Discord WebSocket Error:'), error.message));
+    }
+
+    startHeartbeat(interval) {
+        this.heartbeatInterval = setInterval(() => this.send({ op: 1, d: this.sequence }), interval);
+    }
+
+    identify() {
+        this.send({
+            op: 2,
+            d: {
+                token: this.token,
+                properties: { $os: 'linux', $browser: 'chrome', $device: 'pc' },
+                intents: 513
+            }
+        });
+    }
+
+    handleDispatch(eventName, data, messageHandler) {
+        switch (eventName) {
+            case 'READY':
+                console.log(chalk.green(`===== LOGIN SUCCESS =====`));
+                console.log(chalk.cyan(`Logged in as: ${data.user.username}#${data.user.discriminator}`));
+                this.sessionId = data.session_id;
+                break;
+            case 'MESSAGE_CREATE':
+                messageHandler(data);
+                break;
+        }
+    }
+
+    send(payload) {
+        if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(payload));
+    }
+
+    async sendMessage(channelId, content) {
+        try {
+            await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`,
+                { content },
+                { headers: { 'Authorization': this.token, 'Content-Type': 'application/json' } }
+            );
+        } catch (error) {
+            console.error(chalk.red('Error sending message:'), error.response?.data || error.message);
+        }
+    }
 }
 
 // ฟังก์ชันหลักของ Bot
-async function main(phone, appState) {
+async function main(phone, discordToken) {
     const voucher = new Voucher(phone);
+    const client = new DiscordClient(discordToken);
 
-    login({'appState': appState}, async (error, api) => {
-        if (error) {
-            console.log("[ERROR] Login Failed:", error);
-            await cleanupAndExit(1);
+    const handleMessage = async (message) => {
+        if (message.author?.bot) return;
+
+        if (message.content) {
+            const qrCode = voucher.getQrCode(message.content);
+            if (qrCode) {
+                console.log(chalk.yellow("พบ Voucher Code:"), qrCode);
+                const {error, data} = await voucher.redeem(qrCode);
+                if (error) console.log(chalk.red("Failed:"), (data.status?.message || "ไม่สามารถ redeem ได้"));
+                else console.log(chalk.green("Congrats:"), phone + " received " + data.data.my_ticket.amount_baht + "฿ from " + data.data.owner_profile.full_name);
+            }
         }
-        console.log("[SUCCESS] Login เข้า Facebook สำเร็จ!");
-        console.log("[INFO] Bot กำลังทำงาน... รอรับ Voucher\n");
 
-        api.listen(async (err, message) => {
-            if (err) {
-                console.log("[ERROR] Listen Error:", err);
-                return;
-            }
-
-            // กดอ่านข้อความทุกแชทอัตโนมัติ
-            if (message.threadID) {
-                try {
-                    api.markAsRead(message.threadID);
-                } catch (e) {
-                    // ไม่ต้องแสดง error
-                }
-            }
-
-            if (message.type == "message") {
-                
-                // กรณีที่เป็นข้อความธรรมดา
-                if (message.body) {
-                    const qrCode = voucher.getQrCode(message.body);
-                    if (qrCode != null) {
-                        console.log("[VOUCHER] พบรหัส:", qrCode);
-                        console.log("[PROCESS] กำลัง Redeem...");
-                        
-                        const {error, data} = await voucher.redeem(qrCode);
-                        
-                        if (error) {
-                            console.log("[FAILED]", (data.status?.message || data.message || "ไม่สามารถ redeem ได้"));
-                        } else {
-                            console.log("[SUCCESS] รับเงินสำเร็จ!");
-                            console.log("  - เบอร์:", phone);
-                            console.log("  - จำนวน:", data.data.my_ticket.amount_baht + "฿");
-                            console.log("  - จาก:", data.data.owner_profile.full_name);
-                        }
-                        console.log("");
-                    }
-                }
-
-                // กรณีที่เป็นรูปภาพ
-                if (message.attachments && message.attachments.length > 0 && message.attachments[0].type == "photo") {
-                    console.log("[IMAGE] พบรูปภาพ กำลังอ่าน QR Code...");
+        if (message.attachments?.length > 0) {
+            for (const attachment of message.attachments) {
+                if (attachment.content_type?.startsWith('image/')) {
+                    console.log(chalk.blue("พบรูปภาพ กำลังอ่าน QR Code..."));
                     try {
-                        const imageData = await getImageFromURL(message.attachments[0].url);
+                        const imageData = await getImageFromURL(attachment.url);
                         const decodedQR = await decodeQRFromImage(imageData);
                         const qrCode = voucher.getQrCode(decodedQR);
-
-                        if (qrCode != null) {
-                            console.log("[VOUCHER] พบรหัสจากรูป:", qrCode);
-                            console.log("[PROCESS] กำลัง Redeem...");
-                            
+                        if (qrCode) {
+                            console.log(chalk.yellow("พบ Voucher Code จากรูป:"), qrCode);
                             const {error, data} = await voucher.redeem(qrCode);
-                            
-                            if (error) {
-                                console.log("[FAILED]", (data.status?.message || data.message || "ไม่สามารถ redeem ได้"));
-                            } else {
-                                console.log("[SUCCESS] รับเงินสำเร็จ!");
-                                console.log("  - เบอร์:", phone);
-                                console.log("  - จำนวน:", data.data.my_ticket.amount_baht + "฿");
-                                console.log("  - จาก:", data.data.owner_profile.full_name);
-                            }
-                            console.log("");
-                        } else {
-                            console.log("[INFO] ไม่พบรหัส Voucher ในรูปภาพ");
+                            if (error) console.log(chalk.red("Failed:"), (data.status?.message || "ไม่สามารถ redeem ได้"));
+                            else console.log(chalk.green("Congrats:"), phone + " received " + data.data.my_ticket.amount_baht + "฿ from " + data.data.owner_profile.full_name);
                         }
                     } catch (error) {
-                        console.error("[ERROR] อ่าน QR Code ไม่สำเร็จ:", error.message);
+                        console.error(chalk.red("เกิดข้อผิดพลาดในการอ่าน QR Code:"), error.message);
                     }
                 }
-
-                // คำสั่ง ping
-                if (message.body && message.body.toLowerCase() == "ping") {
-                    api.sendMessage("🟢 pong - bot กำลังทำงานอยู่", message.threadID);
-                    console.log("[PING] ตอบกลับคำสั่ง ping");
-                }
             }
-        });
-    });
+        }
+
+        if (message.content === "!ping") {
+            await client.sendMessage(message.channel_id, "pong - bot กำลังทำงานอยู่");
+        }
+    };
+
+    client.connect(handleMessage);
 }
 
-// เริ่มต้นโปรแกรม
-console.log("[START] กำลังเริ่มต้น Bot...\n");
+console.log(chalk.cyan("===== bot free redeem discord =====\n"));
+console.log(chalk.yellow("เบอร์รับเงิน:"), phone);
+console.log(chalk.yellow("กำลัง login เข้า Discord..."));
+main(phone, discordToken);
 
-const phone = "0959426013";
-console.log("[CONFIG] เบอร์รับเงิน:", phone);
-console.log("[CONFIG] กำลัง login เข้า Facebook...\n");
+// เรียก server เพื่อ keep-alive
+keepAlive();
 
-try {
-    const appState = JSON.parse(fs.readFileSync("appState.json", "utf8"));
-    main(phone, appState);
-} catch (error) {
-    console.log("[ERROR] ไม่พบไฟล์ appState.json หรืออ่านไม่ได้");
-    console.log("[ERROR]", error.message);
-    process.exit(1);
-}
-
-// จัดการ Error
-process.on("uncaughtException", async (error) => {
-    console.log("[ERROR]", error.message);
-    console.log("[INFO] Bot จะพยายาม Reconnect ใน 5 วินาที...\n");
-    setTimeout(() => {
-        try {
-            const appState = JSON.parse(fs.readFileSync("appState.json", "utf8"));
-            main(phone, appState);
-        } catch (e) {
-            console.log("[ERROR] Reconnect ไม่สำเร็จ");
-        }
-    }, 5000);
-});
-
-process.on("unhandledRejection", async (error) => {
-    console.log("[ERROR]", error.message);
-    console.log("[INFO] Bot จะพยายาม Reconnect ใน 5 วินาที...\n");
-    setTimeout(() => {
-        try {
-            const appState = JSON.parse(fs.readFileSync("appState.json", "utf8"));
-            main(phone, appState);
-        } catch (e) {
-            console.log("[ERROR] Reconnect ไม่สำเร็จ");
-        }
-    }, 5000);
-});
+// จัดการ Error ที่ไม่คาดคิด
+process.on("uncaughtException", (error) => console.log(chalk.red("Error:"), error.message));
+process.on("unhandledRejection", (error) => console.log(chalk.red("Error:"), error.message));
