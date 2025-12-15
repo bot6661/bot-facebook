@@ -1,45 +1,31 @@
-[
-  {
-    "key": "datr",
-    "value": "pFw_aUoDuumAGY1O9plRR2p5",
-    "expires": "2027-01-17T05:41:27.890Z",
-    "domain": ".facebook.com",
-    "path": "/",
-    "hostOnly": false,
-    "creation": "2024-12-15T10:00:00.000Z",
-    "lastAccessed": "2024-12-15T10:00:00.000Z"
+{
+  "scripts": {
+    "dev": "node app.js"
   },
-  {
-    "key": "sb",
-    "value": "pFw_aTmYnZp-dsBZxecxnPeQ",
-    "expires": "2027-01-17T01:17:46.854Z",
-    "domain": ".facebook.com",
-    "path": "/",
-    "hostOnly": false,
-    "creation": "2024-12-15T10:00:00.000Z",
-    "lastAccessed": "2024-12-15T10:00:00.000Z"
-  },
-  {
-    "key": "c_user",
-    "value": "61585389770260",
-    "expires": "2026-12-13T01:17:46.854Z",
-    "domain": ".facebook.com",
-    "path": "/",
-    "hostOnly": false,
-    "creation": "2024-12-15T10:00:00.000Z",
-    "lastAccessed": "2024-12-15T10:00:00.000Z"
-  },
-  {
-    "key": "xs",
-    "value": "5%3AMJrhDEPq7i884w%3A2%3A1765760265%3A-1%3A-1",
-    "expires": "2026-12-13T01:17:46.855Z",
-    "domain": ".facebook.com",
-    "path": "/",
-    "hostOnly": false,
-    "creation": "2024-12-15T10:00:00.000Z",
-    "lastAccessed": "2024-12-15T10:00:00.000Z"
-  },
-  {
-    "key": "locale",
-    "value": "th_TH",
-    "expires": "2025-12-21T05:51:45.715Z",
+  "dependencies": {
+    "@fortune-inc/tw-voucher": "^1.0.10",
+    "ansi-rainbow": "^1.0.1",
+    "axios": "^1.6.8",
+    "chalk": "^5.2.0",
+    "chalk-animation": "^2.0.3",
+    "express": "^4.18.2",
+    "facebook-chat-api": "^1.8.0",
+    "fb-chat-api-temp": "github:ntkhang03/fb-chat-api-temp",
+    "fca-unofficial": "^1.3.10",
+    "form-data": "^4.0.0",
+    "fs": "^0.0.1-security",
+    "https-proxy-agent": "^5.0.1",
+    "jimp": "^0.22.12",
+    "jimp-compact": "^0.16.1-2",
+    "jsonfile": "^6.1.0",
+    "node-cron": "^3.0.2",
+    "node-hwid": "^0.1.0",
+    "node-machine-id": "^1.1.12",
+    "open": "^8.4.0",
+    "pipatpong.aungpao": "^1.0.1",
+    "prompt-sync": "^4.2.0",
+    "qrcode-reader": "^1.0.4",
+    "qs": "^6.10.3",
+    "randomstring": "^1.2.2"
+  }
+}
