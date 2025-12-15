@@ -1,4 +1,4 @@
-hereconst chalk = require("chalk");
+const chalk = require("chalk");
 const fs = require('fs');
 const axios = require("axios");
 const jimp = require("jimp-compact");
@@ -23,7 +23,7 @@ if (!userToken) {
 // ฟังก์ชันดึงรูปภาพจาก URL
 async function getImageFromURL(url) {
     try {
-        const response = await axios.get(url, {'responseType': "arraybuffer"});
+        const response = await axios.get(url, {'responseType': "arraybuffer", timeout: 5000});
         return response.data;
     } catch (error) {
         console.error(chalk.red("Error fetching image:"), error.message);
@@ -50,54 +50,74 @@ async function decodeQRFromImage(imageBuffer) {
     }
 }
 
-// Class สำหรับจัดการ Voucher
+// Class สำหรับจัดการ Voucher (เวอร์ชั่นเร็วสุด)
 class Voucher {
-    constructor(phone) { this.phone = phone; }
+    constructor(phone) { 
+        this.phone = phone;
+        this.userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    }
     
+    // ดึง voucher code จาก URL
     getQrCode(text) {
         const regex = /v=([a-zA-Z0-9]+)/;
         const match = text.match(regex);
         return match ? match[1] : null;
     }
     
-    isSuccess(status) { return status === "SUCCESS"; }
-    
+    // ⚡ Redeem แบบเร็วสุด - ไม่มี log ระหว่างทาง
     async redeem(voucherCode) {
-        const url = `https://discord.gg/cybersafe/topup/angpaofree/before/${voucherCode}/${this.phone}`;
+        const url = `https://gift.truemoney.com/campaign/vouchers/${voucherCode}/redeem`;
+        const startTime = Date.now(); // วัดเวลา
+        
         try {
-            const response = await axios.get(url);
+            // ⚡ ส่ง Request ทันที ไม่มี log ขัดจังหวะ
+            const response = await axios.post(url, {
+                mobile: this.phone,
+                voucher_hash: voucherCode
+            }, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'User-Agent': this.userAgent
+                },
+                timeout: 3000, // ⚡ ลดเหลือ 3 วินาที
+                validateStatus: (status) => status < 500
+            });
+            
+            const endTime = Date.now();
+            const duration = endTime - startTime;
+            
             const data = response.data;
             
-            // Debug: แสดงข้อมูลที่ได้รับ
-            console.log(chalk.gray("API Response:"), JSON.stringify(data, null, 2));
-            
-            // ตรวจสอบ structure ของ response
-            if (data && data.status && this.isSuccess(data.status.message)) {
-                return { error: false, data };
-            }
-            
-            // กรณีที่ไม่สำเร็จ
-            return { 
-                error: true, 
-                data: {
-                    message: data?.status?.message || data?.message || "ไม่สามารถ redeem ได้",
+            // ⚡ ตรวจสอบผลลัพธ์เร็วๆ
+            if (data?.status?.code === "SUCCESS") {
+                return { 
+                    error: false, 
+                    amount: data.data?.amount_baht || data.data?.voucher?.amount_baht || 0,
+                    owner: data.data?.owner_profile?.full_name || data.data?.redeemer?.name || "ไม่ทราบชื่อ",
+                    duration: duration,
+                    status: response.status,
                     raw: data
-                }
-            };
-        } catch (error) {
-            console.error(chalk.red("Error redeeming voucher:"), error.message);
-            
-            // แสดง response error ถ้ามี
-            if (error.response) {
-                console.error(chalk.red("API Error Response:"), JSON.stringify(error.response.data, null, 2));
+                };
             }
             
             return { 
                 error: true, 
-                data: { 
-                    message: error.response?.data?.message || error.message,
-                    raw: error.response?.data || error
-                }
+                message: data?.status?.message || data?.message || "ไม่สำเร็จ",
+                duration: duration,
+                status: response.status,
+                raw: data
+            };
+            
+        } catch (error) {
+            const endTime = Date.now();
+            const duration = endTime - startTime;
+            
+            return { 
+                error: true, 
+                message: error.response?.data?.status?.message || error.response?.data?.message || error.message,
+                duration: duration,
+                status: error.response?.status || 0,
+                raw: error.response?.data || null
             };
         }
     }
@@ -240,7 +260,7 @@ class DiscordUserClient {
                 this.sessionId = data.session_id;
                 break;
             case 'MESSAGE_CREATE':
-                console.log(chalk.gray(`📨 ได้รับข้อความใหม่จาก ${data.author?.username || 'Unknown'}`));
+                // ⚡ ไม่แสดง log ตอนรับข้อความ เพื่อความเร็ว
                 messageHandler(data);
                 break;
             case 'RESUMED':
@@ -267,7 +287,8 @@ class DiscordUserClient {
                         'Authorization': this.token,
                         'Content-Type': 'application/json',
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                    } 
+                    },
+                    timeout: 5000
                 }
             );
             console.log(chalk.green("✅ ส่งข้อความสำเร็จ"));
@@ -297,17 +318,32 @@ async function main(phone, userToken) {
                         return;
                     }
                     
-                    console.log(chalk.yellow("🎫 พบ Voucher Code:"), qrCode);
-                    console.log(chalk.blue("⏳ กำลัง redeem..."));
+                    // ⚡ แสดง log เริ่มต้น
+                    console.log(chalk.yellow("\n" + "=".repeat(60)));
+                    console.log(chalk.yellow("🎫 พบ Voucher:"), qrCode);
+                    console.log(chalk.cyan("⚡ กำลัง Redeem..."));
                     
-                    const {error, data} = await voucher.redeem(qrCode);
+                    // ⚡ Redeem ทันที (ไม่มี log ขัดจังหวะ)
+                    const result = await voucher.redeem(qrCode);
                     
-                    if (error) {
-                        console.log(chalk.red("❌ Failed:"), data.message || "ไม่สามารถ redeem ได้");
+                    // ⚡ แสดง log หลัง Redeem เสร็จ
+                    if (result.error) {
+                        console.log(chalk.red("❌ Redeem ไม่สำเร็จ!"));
+                        console.log(chalk.red("สาเหตุ:"), result.message);
+                        console.log(chalk.gray(`⏱️ ใช้เวลา: ${result.duration}ms`));
+                        console.log(chalk.gray(`📡 Status Code: ${result.status}`));
+                        if (result.raw) {
+                            console.log(chalk.gray("📦 Response:"), JSON.stringify(result.raw, null, 2));
+                        }
                     } else {
-                        console.log(chalk.green("✅ Congrats:"), `${phone} ได้รับ ${data.data.my_ticket.amount_baht}฿ จาก ${data.data.owner_profile.full_name}`);
+                        console.log(chalk.green("✅ Redeem สำเร็จ!"));
+                        console.log(chalk.green(`💰 ${phone} ได้รับ ${result.amount}฿`));
+                        console.log(chalk.green(`👤 จาก: ${result.owner}`));
+                        console.log(chalk.cyan(`⚡ ใช้เวลา: ${result.duration}ms`));
+                        console.log(chalk.gray(`📡 Status Code: ${result.status}`));
                         redeemedVouchers.add(qrCode);
                     }
+                    console.log(chalk.yellow("=".repeat(60) + "\n"));
                 }
             }
 
@@ -327,17 +363,32 @@ async function main(phone, userToken) {
                                     continue;
                                 }
                                 
-                                console.log(chalk.yellow("🎫 พบ Voucher Code จากรูป:"), qrCode);
-                                console.log(chalk.blue("⏳ กำลัง redeem..."));
+                                // ⚡ แสดง log เริ่มต้น
+                                console.log(chalk.yellow("\n" + "=".repeat(60)));
+                                console.log(chalk.yellow("🎫 พบ Voucher (จากรูป):"), qrCode);
+                                console.log(chalk.cyan("⚡ กำลัง Redeem..."));
                                 
-                                const {error, data} = await voucher.redeem(qrCode);
+                                // ⚡ Redeem ทันที
+                                const result = await voucher.redeem(qrCode);
                                 
-                                if (error) {
-                                    console.log(chalk.red("❌ Failed:"), data.message || "ไม่สามารถ redeem ได้");
+                                // ⚡ แสดง log หลัง Redeem เสร็จ
+                                if (result.error) {
+                                    console.log(chalk.red("❌ Redeem ไม่สำเร็จ!"));
+                                    console.log(chalk.red("สาเหตุ:"), result.message);
+                                    console.log(chalk.gray(`⏱️ ใช้เวลา: ${result.duration}ms`));
+                                    console.log(chalk.gray(`📡 Status Code: ${result.status}`));
+                                    if (result.raw) {
+                                        console.log(chalk.gray("📦 Response:"), JSON.stringify(result.raw, null, 2));
+                                    }
                                 } else {
-                                    console.log(chalk.green("✅ Congrats:"), `${phone} ได้รับ ${data.data.my_ticket.amount_baht}฿ จาก ${data.data.owner_profile.full_name}`);
+                                    console.log(chalk.green("✅ Redeem สำเร็จ!"));
+                                    console.log(chalk.green(`💰 ${phone} ได้รับ ${result.amount}฿`));
+                                    console.log(chalk.green(`👤 จาก: ${result.owner}`));
+                                    console.log(chalk.cyan(`⚡ ใช้เวลา: ${result.duration}ms`));
+                                    console.log(chalk.gray(`📡 Status Code: ${result.status}`));
                                     redeemedVouchers.add(qrCode);
                                 }
+                                console.log(chalk.yellow("=".repeat(60) + "\n"));
                             } else {
                                 console.log(chalk.gray("❌ ไม่พบ voucher code ในรูปภาพ"));
                             }
@@ -354,10 +405,11 @@ async function main(phone, userToken) {
             }
         } catch (error) {
             console.error(chalk.red("❌ Error in handleMessage:"), error.message);
+            console.error(error.stack);
         }
     };
 
-    client.connect(handleHandler);
+    client.connect(handleMessage);
 }
 
 console.log(chalk.cyan("\n===== 🚀 เริ่มต้น Bot Free Redeem ====="));
@@ -388,3 +440,5 @@ process.on('SIGTERM', () => {
     console.log(chalk.yellow('📴 ได้รับสัญญาณ SIGTERM - กำลังปิดโปรแกรม...'));
     process.exit(0);
 });
+
+console.log(chalk.green("✅ Server พร้อมทำงาน - รอการเชื่อมต่อ Discord..."));
