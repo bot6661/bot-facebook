@@ -1,31 +1,18 @@
 {
+  "name": "truemoney-bot",
+  "version": "1.0.0",
+  "main": "index.js",
   "scripts": {
-    "dev": "node app.js"
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": "18.x"
   },
   "dependencies": {
-    "@fortune-inc/tw-voucher": "^1.0.10",
-    "ansi-rainbow": "^1.0.1",
     "axios": "^1.6.8",
-    "chalk": "^5.2.0",
-    "chalk-animation": "^2.0.3",
     "express": "^4.18.2",
-    "facebook-chat-api": "^1.8.0",
-    "fb-chat-api-temp": "github:ntkhang03/fb-chat-api-temp",
     "fca-unofficial": "^1.3.10",
-    "form-data": "^4.0.0",
-    "fs": "^0.0.1-security",
-    "https-proxy-agent": "^5.0.1",
     "jimp": "^0.22.12",
-    "jimp-compact": "^0.16.1-2",
-    "jsonfile": "^6.1.0",
-    "node-cron": "^3.0.2",
-    "node-hwid": "^0.1.0",
-    "node-machine-id": "^1.1.12",
-    "open": "^8.4.0",
-    "pipatpong.aungpao": "^1.0.1",
-    "prompt-sync": "^4.2.0",
-    "qrcode-reader": "^1.0.4",
-    "qs": "^6.10.3",
-    "randomstring": "^1.2.2"
+    "qrcode-reader": "^1.0.4"
   }
 }
