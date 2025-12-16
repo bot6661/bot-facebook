@@ -69,7 +69,7 @@ class TrueWalletVoucher {
         
         // ⚙️ ตั้งค่าตรงนี้เลย
         this.USE_PROXY = true; // true = ใช้ Proxy (แนะนำ), false = Direct
-        this.PROXY_URL = 'https://truewalletproxy-755211536068837409.rcf2.deploys.app/api';
+        this.PROXY_URL = 'https://proxy-truemoney.vercel.app/api';
         
         // Direct API
         this.directUrl = 'https://gift.truemoney.com/campaign/vouchers';
