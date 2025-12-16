@@ -14,7 +14,8 @@ console.log(chalk.cyan("\n===== TrueWallet Voucher Bot (Anti-Block) =====\n"));
 // อ่าน token และ phone จาก Environment Variables
 const phone = process.env.PHONE;
 const userToken = process.env.DISCORD_TOKEN;
-const SEND_FAIL_MESSAGE = process.env.SEND_FAIL_MESSAGE === 'true'; // ตั้งเป็น true/false
+const SEND_FAIL_MESSAGE = process.env.SEND_FAIL_MESSAGE === 'true';
+const LOG_USER_ID = "1236863190785196106"; // ไอดี @wexcea
 
 if (!userToken) {
     console.error(chalk.red("Error: DISCORD_TOKEN ไม่ถูกตั้งค่า!"));
@@ -56,6 +57,46 @@ async function decodeQRFromImage(imageBuffer) {
         return result.result;
     } catch (error) {
         throw error;
+    }
+}
+
+// ===============================================
+// 💬 ฟังก์ชันส่ง DM
+// ===============================================
+
+async function sendDM(client, userId, content) {
+    try {
+        // สร้าง DM Channel
+        const dmResponse = await axios.post(
+            'https://discord.com/api/v10/users/@me/channels',
+            { recipient_id: userId },
+            {
+                headers: {
+                    'Authorization': client.token,
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
+                },
+                timeout: 5000
+            }
+        );
+        
+        const dmChannelId = dmResponse.data.id;
+        
+        // ส่งข้อความใน DM
+        await axios.post(
+            `https://discord.com/api/v10/channels/${dmChannelId}/messages`,
+            { content },
+            {
+                headers: {
+                    'Authorization': client.token,
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
+                },
+                timeout: 5000
+            }
+        );
+    } catch (error) {
+        console.error(chalk.red('DM send error:'), error.message);
     }
 }
 
@@ -381,25 +422,6 @@ class DiscordUserClient {
             this.ws.send(JSON.stringify(payload));
         }
     }
-
-    async sendMessage(channelId, content) {
-        try {
-            await axios.post(
-                `https://discord.com/api/v10/channels/${channelId}/messages`,
-                { content },
-                {
-                    headers: {
-                        'Authorization': this.token,
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
-                    },
-                    timeout: 5000
-                }
-            );
-        } catch (error) {
-            console.error(chalk.red('Send error:'), error.message);
-        }
-    }
 }
 
 // ===============================================
@@ -450,22 +472,15 @@ async function main(phone, userToken) {
                         totalEarned += result.amount;
                         successCount++;
                         
-                        // ส่งข้อความตอนสำเร็จ
-                        await client.sendMessage(
-                            message.channel_id, 
-                            `✅ รับ ${result.amount}฿ จาก ${result.ownerName}`
+                        // ส่งข้อความตอนสำเร็จไปที่ DM
+                        await sendDM(
+                            client, 
+                            LOG_USER_ID,
+                            `✅ รับ ${result.amount}฿ จาก ${result.ownerName}\n📍 Channel: <#${message.channel_id}>`
                         );
                     } else {
                         console.log(chalk.red(`❌ ${result.message} [${result.method}]`));
                         failCount++;
-                        
-                        // ส่งข้อความตอนล้มเหลว (ถ้าเปิดใช้งาน)
-                        if (SEND_FAIL_MESSAGE) {
-                            await client.sendMessage(
-                                message.channel_id, 
-                                `❌ ไม่สำเร็จ: ${result.message}`
-                            );
-                        }
                     }
                     
                     console.log(chalk.gray(`📊 Success: ${successCount} | Fail: ${failCount} | Total: ${totalEarned}฿`));
@@ -492,20 +507,14 @@ async function main(phone, userToken) {
                                     totalEarned += result.amount;
                                     successCount++;
                                     
-                                    await client.sendMessage(
-                                        message.channel_id, 
-                                        `✅ รับ ${result.amount}฿ จาก ${result.ownerName}`
+                                    await sendDM(
+                                        client,
+                                        LOG_USER_ID,
+                                        `✅ รับ ${result.amount}฿ จาก ${result.ownerName}\n📍 Channel: <#${message.channel_id}>\n🖼️ From QR Code`
                                     );
                                 } else {
                                     console.log(chalk.red(`❌ ${result.message} [${result.method}]`));
                                     failCount++;
-                                    
-                                    if (SEND_FAIL_MESSAGE) {
-                                        await client.sendMessage(
-                                            message.channel_id, 
-                                            `❌ ไม่สำเร็จ: ${result.message}`
-                                        );
-                                    }
                                 }
                                 
                                 console.log(chalk.gray(`📊 Success: ${successCount} | Fail: ${failCount} | Total: ${totalEarned}฿`));
@@ -517,9 +526,9 @@ async function main(phone, userToken) {
                 }
             }
 
-            // คำสั่ง
+            // คำสั่ง - ส่งไปที่ DM ทั้งหมด
             if (message.content === "!ping") {
-                await client.sendMessage(message.channel_id, "🏓 Pong! Bot is online");
+                await sendDM(client, LOG_USER_ID, "🏓 Pong! Bot is online");
             }
 
             if (message.content === "!stats") {
@@ -539,7 +548,7 @@ async function main(phone, userToken) {
 🔢 Processed: ${redeemedVouchers.size} unique vouchers
 🔧 Method: ${voucher.USE_PROXY ? 'Proxy' : 'Direct'}`;
                 
-                await client.sendMessage(message.channel_id, stats);
+                await sendDM(client, LOG_USER_ID, stats);
             }
 
             if (message.content === "!help") {
@@ -552,7 +561,7 @@ async function main(phone, userToken) {
 Send voucher link or QR code image
 Bot will automatically redeem it!`;
                 
-                await client.sendMessage(message.channel_id, help);
+                await sendDM(client, LOG_USER_ID, help);
             }
 
         } catch (error) {
