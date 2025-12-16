@@ -60,13 +60,19 @@ async function decodeQRFromImage(imageBuffer) {
 }
 
 // ===============================================
-// 💰 TrueWallet Voucher Class (Direct Redeem Only)
+// 💰 TrueWallet Voucher Class (Proxy + Direct)
 // ===============================================
 
 class TrueWalletVoucher {
     constructor(phone) {
         this.phone = phone;
-        this.baseUrl = 'https://gift.truemoney.com/campaign/vouchers';
+        
+        // ⚙️ ตั้งค่าตรงนี้เลย
+        this.USE_PROXY = true; // true = ใช้ Proxy (แนะนำ), false = Direct
+        this.PROXY_URL = 'https://truewalletproxy-755211536068837409.rcf2.deploys.app/api';
+        
+        // Direct API
+        this.directUrl = 'https://gift.truemoney.com/campaign/vouchers';
         this.headers = {
             'Content-Type': 'application/json',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -91,9 +97,58 @@ class TrueWalletVoucher {
         return null;
     }
 
-    // ⚡ REDEEM ตรงๆ (1 API call เท่านั้น)
-    async redeem(voucherCode) {
-        const url = `${this.baseUrl}/${voucherCode}/redeem`;
+    // ⚡ REDEEM ผ่าน PROXY (ไม่โดนบล็อก)
+    async redeemViaProxy(voucherCode) {
+        try {
+            const response = await axios.post(
+                this.PROXY_URL,
+                {
+                    mobile: this.phone,
+                    voucher: voucherCode
+                },
+                {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'multilabxxxxxxxx'
+                    },
+                    timeout: 10000,
+                    validateStatus: () => true
+                }
+            );
+
+            const data = response.data;
+            const statusCode = data?.status?.code;
+
+            if (statusCode === 'SUCCESS') {
+                return {
+                    success: true,
+                    amount: Number(data.data.my_ticket.amount_baht.replace(/,/g, "")),
+                    ownerName: data.data.owner_profile.full_name || 'Unknown',
+                    message: data.status?.message || 'Success',
+                    method: 'proxy'
+                };
+            }
+
+            return {
+                success: false,
+                message: data?.status?.message || data?.status?.code || 'Failed',
+                code: statusCode,
+                method: 'proxy'
+            };
+            
+        } catch (error) {
+            return {
+                success: false,
+                message: error.response?.data?.status?.message || error.message,
+                code: 'ERROR',
+                method: 'proxy'
+            };
+        }
+    }
+
+    // ⚡ REDEEM แบบตรง (อาจโดนบล็อก)
+    async redeemDirect(voucherCode) {
+        const url = `${this.directUrl}/${voucherCode}/redeem`;
         
         try {
             const response = await axios.post(
@@ -105,7 +160,7 @@ class TrueWalletVoucher {
                 {
                     headers: this.headers,
                     timeout: 10000,
-                    validateStatus: () => true // รับทุก status code
+                    validateStatus: () => true
                 }
             );
 
@@ -117,22 +172,34 @@ class TrueWalletVoucher {
                     success: true,
                     amount: data.data?.voucher?.amount_baht || 0,
                     ownerName: data.data?.owner_profile?.full_name || 'Unknown',
-                    message: data.status?.message || 'Success'
+                    message: data.status?.message || 'Success',
+                    method: 'direct'
                 };
             }
 
             return {
                 success: false,
                 message: data?.status?.message || 'Failed',
-                code: statusCode
+                code: statusCode,
+                method: 'direct'
             };
             
         } catch (error) {
             return {
                 success: false,
                 message: error.response?.data?.status?.message || error.message,
-                code: 'ERROR'
+                code: 'ERROR',
+                method: 'direct'
             };
+        }
+    }
+
+    // ⚡ REDEEM (เลือกอัตโนมัติ)
+    async redeem(voucherCode) {
+        if (this.USE_PROXY) {
+            return await this.redeemViaProxy(voucherCode);
+        } else {
+            return await this.redeemDirect(voucherCode);
         }
     }
 }
@@ -353,6 +420,13 @@ async function main(phone, userToken) {
     const client = new DiscordUserClient(userToken);
     const redeemedVouchers = new Set();
 
+    // แสดงว่าใช้ method ไหน
+    console.log(chalk.magenta(`🔧 Redeem Method: ${voucher.USE_PROXY ? 'PROXY (Anti-Block)' : 'DIRECT'}`));
+    if (voucher.USE_PROXY) {
+        console.log(chalk.magenta(`🌐 Proxy URL: ${voucher.PROXY_URL}`));
+    }
+    console.log(chalk.gray("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
+
     const handleMessage = async (message) => {
         try {
             if (message.author?.bot) return;
@@ -367,11 +441,11 @@ async function main(phone, userToken) {
                     
                     console.log(chalk.yellow(`\n🎫 Voucher: ${voucherCode}`));
                     
-                    // ⚡ REDEEM ตรงๆ (1 API call)
+                    // ⚡ REDEEM
                     const result = await voucher.redeem(voucherCode);
                     
                     if (result.success) {
-                        console.log(chalk.green(`✅ +${result.amount}฿ from ${result.ownerName}`));
+                        console.log(chalk.green(`✅ +${result.amount}฿ from ${result.ownerName} [${result.method}]`));
                         redeemedVouchers.add(voucherCode);
                         totalEarned += result.amount;
                         successCount++;
@@ -382,7 +456,7 @@ async function main(phone, userToken) {
                             `✅ รับ ${result.amount}฿ จาก ${result.ownerName}`
                         );
                     } else {
-                        console.log(chalk.red(`❌ ${result.message}`));
+                        console.log(chalk.red(`❌ ${result.message} [${result.method}]`));
                         failCount++;
                         
                         // ส่งข้อความตอนล้มเหลว (ถ้าเปิดใช้งาน)
@@ -413,7 +487,7 @@ async function main(phone, userToken) {
                                 const result = await voucher.redeem(voucherCode);
                                 
                                 if (result.success) {
-                                    console.log(chalk.green(`✅ +${result.amount}฿ from ${result.ownerName}`));
+                                    console.log(chalk.green(`✅ +${result.amount}฿ from ${result.ownerName} [${result.method}]`));
                                     redeemedVouchers.add(voucherCode);
                                     totalEarned += result.amount;
                                     successCount++;
@@ -423,7 +497,7 @@ async function main(phone, userToken) {
                                         `✅ รับ ${result.amount}฿ จาก ${result.ownerName}`
                                     );
                                 } else {
-                                    console.log(chalk.red(`❌ ${result.message}`));
+                                    console.log(chalk.red(`❌ ${result.message} [${result.method}]`));
                                     failCount++;
                                     
                                     if (SEND_FAIL_MESSAGE) {
@@ -462,7 +536,8 @@ async function main(phone, userToken) {
 📈 Success Rate: ${successRate}%
 💰 Total Earned: ${totalEarned}฿
 ⏱️ Uptime: ${hours}h ${minutes}m
-🔢 Processed: ${redeemedVouchers.size} unique vouchers`;
+🔢 Processed: ${redeemedVouchers.size} unique vouchers
+🔧 Method: ${voucher.USE_PROXY ? 'Proxy' : 'Direct'}`;
                 
                 await client.sendMessage(message.channel_id, stats);
             }
@@ -495,7 +570,6 @@ Bot will automatically redeem it!`;
 console.log(chalk.cyan("🚀 Starting bot..."));
 console.log(chalk.yellow("📱 Phone:"), phone.replace(/(\d{3})\d{4}(\d{3})/, '$1****$2'));
 console.log(chalk.yellow("⚙️ Send fail messages:"), SEND_FAIL_MESSAGE ? 'Yes' : 'No (logs only)');
-console.log(chalk.gray("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
 
 keepAlive();
 
