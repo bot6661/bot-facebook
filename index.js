@@ -9,11 +9,12 @@ const keepAlive = require("./server.js");
 console.clear();
 process.env.TZ = "Asia/Bangkok";
 
-console.log(chalk.cyan("\n===== TrueWallet Voucher Bot (Optimized) =====\n"));
+console.log(chalk.cyan("\n===== TrueWallet Voucher Bot (Anti-Block) =====\n"));
 
 // อ่าน token และ phone จาก Environment Variables
 const phone = process.env.PHONE;
 const userToken = process.env.DISCORD_TOKEN;
+const SEND_FAIL_MESSAGE = process.env.SEND_FAIL_MESSAGE === 'true'; // ตั้งเป็น true/false
 
 if (!userToken) {
     console.error(chalk.red("Error: DISCORD_TOKEN ไม่ถูกตั้งค่า!"));
@@ -59,7 +60,7 @@ async function decodeQRFromImage(imageBuffer) {
 }
 
 // ===============================================
-// 💰 TrueWallet Voucher Class (Direct Redeem)
+// 💰 TrueWallet Voucher Class (Direct Redeem Only)
 // ===============================================
 
 class TrueWalletVoucher {
@@ -68,7 +69,7 @@ class TrueWalletVoucher {
         this.baseUrl = 'https://gift.truemoney.com/campaign/vouchers';
         this.headers = {
             'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         };
     }
 
@@ -90,7 +91,7 @@ class TrueWalletVoucher {
         return null;
     }
 
-    // ⚡ REDEEM ตรงๆ ไม่ verify (เหมือน obfuscated code)
+    // ⚡ REDEEM ตรงๆ (1 API call เท่านั้น)
     async redeem(voucherCode) {
         const url = `${this.baseUrl}/${voucherCode}/redeem`;
         
@@ -150,6 +151,7 @@ class DiscordUserClient {
         this.sequence = null;
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 10;
+        this.lastHeartbeatAck = true;
     }
 
     connect(messageHandler) {
@@ -166,37 +168,58 @@ class DiscordUserClient {
         });
 
         this.ws.on('message', (data) => {
-            const payload = JSON.parse(data);
-            const { op, d, s, t } = payload;
-            if (s) this.sequence = s;
+            try {
+                const payload = JSON.parse(data);
+                const { op, d, s, t } = payload;
+                if (s) this.sequence = s;
 
-            switch (op) {
-                case 10:
-                    this.startHeartbeat(d.heartbeat_interval);
-                    this.identify();
-                    break;
-                case 0:
-                    this.handleDispatch(t, d, messageHandler);
-                    break;
-                case 11:
-                    break;
+                switch (op) {
+                    case 10: // Hello
+                        this.startHeartbeat(d.heartbeat_interval);
+                        if (this.sessionId && this.sequence) {
+                            this.resume();
+                        } else {
+                            this.identify();
+                        }
+                        break;
+                    case 0: // Dispatch
+                        this.handleDispatch(t, d, messageHandler);
+                        break;
+                    case 11: // Heartbeat ACK
+                        this.lastHeartbeatAck = true;
+                        break;
+                    case 9: // Invalid Session
+                        console.log(chalk.yellow('⚠️ Invalid session, reidentifying...'));
+                        this.sessionId = null;
+                        this.sequence = null;
+                        setTimeout(() => this.identify(), 2000);
+                        break;
+                    case 7: // Reconnect
+                        console.log(chalk.yellow('🔄 Discord requested reconnect'));
+                        this.ws.close();
+                        break;
+                }
+            } catch (error) {
+                console.error(chalk.red('Parse error:'), error.message);
             }
         });
 
-        this.ws.on('close', (code) => {
-            console.log(chalk.red(`❌ Disconnected: ${code}`));
+        this.ws.on('close', (code, reason) => {
+            console.log(chalk.red(`❌ Disconnected: ${code} - ${reason || 'No reason'}`));
             clearInterval(this.heartbeatInterval);
             
             if (this.reconnectAttempts < this.maxReconnectAttempts) {
                 this.reconnectAttempts++;
                 const delay = Math.min(5000 * this.reconnectAttempts, 30000);
-                console.log(chalk.yellow(`🔄 Reconnecting in ${delay/1000}s...`));
+                console.log(chalk.yellow(`🔄 Reconnecting in ${delay/1000}s (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`));
                 setTimeout(() => this.connect(messageHandler), delay);
+            } else {
+                console.error(chalk.red('❌ Max reconnect attempts reached'));
             }
         });
 
         this.ws.on('error', (error) => {
-            console.error(chalk.red('Error:'), error.message);
+            console.error(chalk.red('WS Error:'), error.message);
         });
     }
 
@@ -205,43 +228,64 @@ class DiscordUserClient {
         
         this.heartbeatInterval = setInterval(() => {
             if (this.ws && this.ws.readyState === 1) {
+                if (!this.lastHeartbeatAck) {
+                    console.log(chalk.yellow('⚠️ Heartbeat not acknowledged, reconnecting...'));
+                    this.ws.close(4000, 'Heartbeat timeout');
+                    return;
+                }
+                this.lastHeartbeatAck = false;
                 this.send({ op: 1, d: this.sequence });
             }
         }, interval);
     }
 
     identify() {
+        const delay = Math.floor(Math.random() * 3000) + 1000; // 1-4 วินาที
+        setTimeout(() => {
+            this.send({
+                op: 2,
+                d: {
+                    token: this.token,
+                    capabilities: 16381,
+                    properties: {
+                        os: 'Linux',
+                        browser: 'Chrome',
+                        device: '',
+                        system_locale: 'en-US',
+                        browser_user_agent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        browser_version: '120.0.0.0',
+                        os_version: '',
+                        referrer: '',
+                        referring_domain: '',
+                        referrer_current: '',
+                        referring_domain_current: '',
+                        release_channel: 'stable',
+                        client_build_number: 261954,
+                        client_event_source: null
+                    },
+                    presence: {
+                        status: 'online',
+                        since: 0,
+                        activities: [],
+                        afk: false
+                    },
+                    compress: false,
+                    client_state: {
+                        guild_versions: {}
+                    }
+                }
+            });
+        }, delay);
+    }
+
+    resume() {
+        console.log(chalk.blue('🔄 Resuming session...'));
         this.send({
-            op: 2,
+            op: 6,
             d: {
                 token: this.token,
-                capabilities: 16381,
-                properties: {
-                    os: 'Linux',
-                    browser: 'Chrome',
-                    device: '',
-                    system_locale: 'en-US',
-                    browser_user_agent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-                    browser_version: '120.0.0.0',
-                    os_version: '',
-                    referrer: '',
-                    referring_domain: '',
-                    referrer_current: '',
-                    referring_domain_current: '',
-                    release_channel: 'stable',
-                    client_build_number: 261954,
-                    client_event_source: null
-                },
-                presence: {
-                    status: 'online',
-                    since: 0,
-                    activities: [],
-                    afk: false
-                },
-                compress: false,
-                client_state: {
-                    guild_versions: {}
-                }
+                session_id: this.sessionId,
+                seq: this.sequence
             }
         });
     }
@@ -251,9 +295,13 @@ class DiscordUserClient {
             case 'READY':
                 console.log(chalk.green("\n===== LOGIN SUCCESS ====="));
                 console.log(chalk.cyan(`👤 ${data.user.username}#${data.user.discriminator}`));
+                console.log(chalk.cyan(`🆔 ${data.user.id}`));
                 console.log(chalk.cyan(`📱 ${phone.replace(/(\d{3})\d{4}(\d{3})/, '$1****$2')}`));
                 console.log(chalk.green("=========================\n"));
                 this.sessionId = data.session_id;
+                break;
+            case 'RESUMED':
+                console.log(chalk.green('✅ Session resumed successfully'));
                 break;
             case 'MESSAGE_CREATE':
                 messageHandler(data);
@@ -267,7 +315,6 @@ class DiscordUserClient {
         }
     }
 
-    // ⚡ ส่งข้อความแค่ตอนจำเป็นเท่านั้น
     async sendMessage(channelId, content) {
         try {
             await axios.post(
@@ -295,6 +342,7 @@ class DiscordUserClient {
 let totalEarned = 0;
 let successCount = 0;
 let failCount = 0;
+const startTime = Date.now();
 
 // ===============================================
 // 🚀 Main Bot Function
@@ -306,88 +354,134 @@ async function main(phone, userToken) {
     const redeemedVouchers = new Set();
 
     const handleMessage = async (message) => {
-        if (message.author?.bot) return;
+        try {
+            if (message.author?.bot) return;
 
-        // ตรวจสอบ voucher code ในข้อความ
-        if (message.content) {
-            const voucherCode = voucher.getVoucherCode(message.content);
-            if (voucherCode) {
-                if (redeemedVouchers.has(voucherCode)) {
-                    return; // ไม่แสดง log ซ้ำ
-                }
-                
-                console.log(chalk.yellow(`🎫 ${voucherCode}`));
-                
-                // ⚡ REDEEM ตรงๆ ไม่ verify
-                const result = await voucher.redeem(voucherCode);
-                
-                if (result.success) {
-                    console.log(chalk.green(`✅ +${result.amount}฿ from ${result.ownerName}`));
-                    redeemedVouchers.add(voucherCode);
-                    totalEarned += result.amount;
-                    successCount++;
+            // ตรวจสอบ voucher code ในข้อความ
+            if (message.content) {
+                const voucherCode = voucher.getVoucherCode(message.content);
+                if (voucherCode) {
+                    if (redeemedVouchers.has(voucherCode)) {
+                        return; // ไม่แสดง log ซ้ำ
+                    }
                     
-                    // ส่งข้อความแค่ตอนสำเร็จ
-                    await client.sendMessage(
-                        message.channel_id, 
-                        `✅ รับ ${result.amount}฿ จาก ${result.ownerName}`
-                    );
-                } else {
-                    console.log(chalk.red(`❌ ${result.message}`));
-                    failCount++;
+                    console.log(chalk.yellow(`\n🎫 Voucher: ${voucherCode}`));
+                    
+                    // ⚡ REDEEM ตรงๆ (1 API call)
+                    const result = await voucher.redeem(voucherCode);
+                    
+                    if (result.success) {
+                        console.log(chalk.green(`✅ +${result.amount}฿ from ${result.ownerName}`));
+                        redeemedVouchers.add(voucherCode);
+                        totalEarned += result.amount;
+                        successCount++;
+                        
+                        // ส่งข้อความตอนสำเร็จ
+                        await client.sendMessage(
+                            message.channel_id, 
+                            `✅ รับ ${result.amount}฿ จาก ${result.ownerName}`
+                        );
+                    } else {
+                        console.log(chalk.red(`❌ ${result.message}`));
+                        failCount++;
+                        
+                        // ส่งข้อความตอนล้มเหลว (ถ้าเปิดใช้งาน)
+                        if (SEND_FAIL_MESSAGE) {
+                            await client.sendMessage(
+                                message.channel_id, 
+                                `❌ ไม่สำเร็จ: ${result.message}`
+                            );
+                        }
+                    }
+                    
+                    console.log(chalk.gray(`📊 Success: ${successCount} | Fail: ${failCount} | Total: ${totalEarned}฿`));
                 }
             }
-        }
 
-        // ตรวจสอบรูปภาพ
-        if (message.attachments?.length > 0) {
-            for (const attachment of message.attachments) {
-                if (attachment.content_type?.startsWith('image/')) {
-                    try {
-                        const imageData = await getImageFromURL(attachment.url);
-                        const decodedQR = await decodeQRFromImage(imageData);
-                        const voucherCode = voucher.getVoucherCode(decodedQR);
+            // ตรวจสอบรูปภาพ
+            if (message.attachments?.length > 0) {
+                for (const attachment of message.attachments) {
+                    if (attachment.content_type?.startsWith('image/')) {
+                        try {
+                            const imageData = await getImageFromURL(attachment.url);
+                            const decodedQR = await decodeQRFromImage(imageData);
+                            const voucherCode = voucher.getVoucherCode(decodedQR);
 
-                        if (voucherCode && !redeemedVouchers.has(voucherCode)) {
-                            console.log(chalk.yellow(`🎫 ${voucherCode} (from image)`));
-                            
-                            const result = await voucher.redeem(voucherCode);
-                            
-                            if (result.success) {
-                                console.log(chalk.green(`✅ +${result.amount}฿ from ${result.ownerName}`));
-                                redeemedVouchers.add(voucherCode);
-                                totalEarned += result.amount;
-                                successCount++;
+                            if (voucherCode && !redeemedVouchers.has(voucherCode)) {
+                                console.log(chalk.yellow(`\n🎫 Voucher (image): ${voucherCode}`));
                                 
-                                await client.sendMessage(
-                                    message.channel_id, 
-                                    `✅ รับ ${result.amount}฿ จาก ${result.ownerName}`
-                                );
-                            } else {
-                                console.log(chalk.red(`❌ ${result.message}`));
-                                failCount++;
+                                const result = await voucher.redeem(voucherCode);
+                                
+                                if (result.success) {
+                                    console.log(chalk.green(`✅ +${result.amount}฿ from ${result.ownerName}`));
+                                    redeemedVouchers.add(voucherCode);
+                                    totalEarned += result.amount;
+                                    successCount++;
+                                    
+                                    await client.sendMessage(
+                                        message.channel_id, 
+                                        `✅ รับ ${result.amount}฿ จาก ${result.ownerName}`
+                                    );
+                                } else {
+                                    console.log(chalk.red(`❌ ${result.message}`));
+                                    failCount++;
+                                    
+                                    if (SEND_FAIL_MESSAGE) {
+                                        await client.sendMessage(
+                                            message.channel_id, 
+                                            `❌ ไม่สำเร็จ: ${result.message}`
+                                        );
+                                    }
+                                }
+                                
+                                console.log(chalk.gray(`📊 Success: ${successCount} | Fail: ${failCount} | Total: ${totalEarned}฿`));
                             }
+                        } catch (error) {
+                            console.error(chalk.red('QR decode error:'), error.message);
                         }
-                    } catch (error) {
-                        console.error(chalk.red('QR error:'), error.message);
                     }
                 }
             }
-        }
 
-        // คำสั่ง
-        if (message.content === "!ping") {
-            await client.sendMessage(message.channel_id, "🏓 Pong!");
-        }
+            // คำสั่ง
+            if (message.content === "!ping") {
+                await client.sendMessage(message.channel_id, "🏓 Pong! Bot is online");
+            }
 
-        if (message.content === "!stats") {
-            const uptime = Math.floor(process.uptime());
-            const hours = Math.floor(uptime / 3600);
-            const minutes = Math.floor((uptime % 3600) / 60);
-            await client.sendMessage(
-                message.channel_id, 
-                `📊 Stats\n✅ ${successCount} | ❌ ${failCount}\n💰 ${totalEarned}฿\n⏱️ ${hours}h ${minutes}m`
-            );
+            if (message.content === "!stats") {
+                const uptime = Math.floor((Date.now() - startTime) / 1000);
+                const hours = Math.floor(uptime / 3600);
+                const minutes = Math.floor((uptime % 3600) / 60);
+                const successRate = successCount + failCount > 0 
+                    ? ((successCount / (successCount + failCount)) * 100).toFixed(1)
+                    : 0;
+                
+                const stats = `📊 **Bot Statistics**
+✅ Success: ${successCount}
+❌ Failed: ${failCount}
+📈 Success Rate: ${successRate}%
+💰 Total Earned: ${totalEarned}฿
+⏱️ Uptime: ${hours}h ${minutes}m
+🔢 Processed: ${redeemedVouchers.size} unique vouchers`;
+                
+                await client.sendMessage(message.channel_id, stats);
+            }
+
+            if (message.content === "!help") {
+                const help = `🤖 **Available Commands**
+\`!ping\` - Check bot status
+\`!stats\` - View statistics
+\`!help\` - Show this help
+
+**How to use:**
+Send voucher link or QR code image
+Bot will automatically redeem it!`;
+                
+                await client.sendMessage(message.channel_id, help);
+            }
+
+        } catch (error) {
+            console.error(chalk.red('Handler error:'), error.message);
         }
     };
 
@@ -395,11 +489,13 @@ async function main(phone, userToken) {
 }
 
 // ===============================================
-// 🏁 Start
+// 🏁 Start Bot
 // ===============================================
 
-console.log(chalk.cyan("Starting bot..."));
-console.log(chalk.yellow("📱"), phone.replace(/(\d{3})\d{4}(\d{3})/, '$1****$2'));
+console.log(chalk.cyan("🚀 Starting bot..."));
+console.log(chalk.yellow("📱 Phone:"), phone.replace(/(\d{3})\d{4}(\d{3})/, '$1****$2'));
+console.log(chalk.yellow("⚙️ Send fail messages:"), SEND_FAIL_MESSAGE ? 'Yes' : 'No (logs only)');
+console.log(chalk.gray("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
 
 keepAlive();
 
@@ -409,19 +505,27 @@ setTimeout(() => {
 
 // Error Handling
 process.on("uncaughtException", (error) => {
-    console.log(chalk.red("Error:"), error.message);
+    console.log(chalk.red("💥 Uncaught Exception:"), error.message);
 });
 
 process.on("unhandledRejection", (error) => {
-    console.log(chalk.red("Error:"), error.message);
+    console.log(chalk.red("💥 Unhandled Rejection:"), error.message);
 });
 
 process.on('SIGTERM', () => {
-    console.log(chalk.yellow('Shutting down...'));
+    console.log(chalk.yellow('\n📴 Shutting down gracefully...'));
+    console.log(chalk.cyan(`📊 Final Stats: ✅ ${successCount} | ❌ ${failCount} | 💰 ${totalEarned}฿`));
     process.exit(0);
 });
 
 process.on('SIGINT', () => {
-    console.log(chalk.yellow('Shutting down...'));
+    console.log(chalk.yellow('\n📴 Shutting down gracefully...'));
+    console.log(chalk.cyan(`📊 Final Stats: ✅ ${successCount} | ❌ ${failCount} | 💰 ${totalEarned}฿`));
     process.exit(0);
 });
+
+// Heartbeat log (ทุก 5 นาที)
+setInterval(() => {
+    const uptime = Math.floor((Date.now() - startTime) / 1000 / 60);
+    console.log(chalk.gray(`⏰ [${new Date().toLocaleTimeString('th-TH')}] Alive | Uptime: ${uptime}m | ✅ ${successCount} | ❌ ${failCount} | 💰 ${totalEarned}฿`));
+}, 300000);
