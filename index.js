@@ -21,39 +21,60 @@ if (!userToken || !phone || !WEBHOOK_URL) {
 }
 
 // ===============================================
-// 💬 ส่ง Webhook (ไม่รอ)
+// 💬 ส่ง Webhook (ไม่รอ - เร็วสุด)
 // ===============================================
 
 function sendWebhook(embeds) {
     axios.post(WEBHOOK_URL, { embeds }, {
         headers: { 'Content-Type': 'application/json' },
-        timeout: 3000
+        timeout: 2000
     }).catch(() => {});
 }
 
 // ===============================================
-// 🖼️ Image Processing
+// 🖼️ Image Processing (เร็วสุด)
 // ===============================================
 
 async function getImageFromURL(url) {
     const response = await axios.get(url, { 
         responseType: "arraybuffer",
-        timeout: 6000
+        timeout: 5000,
+        maxContentLength: 10 * 1024 * 1024 // 10MB
     });
     return response.data;
 }
 
 async function decodeQRFromImage(imageBuffer) {
     const image = await jimp.read(imageBuffer);
-    const qr = new qrcode();
-    return new Promise((resolve, reject) => {
-        qr.callback = (err, value) => err ? reject(err) : resolve(value.result);
-        qr.decode(image.bitmap);
-    });
+    
+    // ลองแค่ 2 วิธี (เร็วสุด)
+    const attempts = [
+        image, // ขนาดเดิม
+        image.clone().resize(800, jimp.AUTO).greyscale() // ย่อ + ขาวดำ
+    ];
+    
+    for (const img of attempts) {
+        try {
+            const qr = new qrcode();
+            const result = await Promise.race([
+                new Promise((resolve, reject) => {
+                    qr.callback = (err, value) => err ? reject(err) : resolve(value.result);
+                    qr.decode(img.bitmap);
+                }),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000))
+            ]);
+            
+            if (result) return result;
+        } catch (e) {
+            continue;
+        }
+    }
+    
+    throw new Error('No QR');
 }
 
 // ===============================================
-// 💰 TrueWallet Voucher
+// 💰 TrueWallet Voucher (เร็วสุด)
 // ===============================================
 
 class TrueWalletVoucher {
@@ -86,7 +107,7 @@ class TrueWalletVoucher {
                         'Content-Type': 'application/json',
                         'User-Agent': 'multilabxxxxxxxx'
                     },
-                    timeout: 6000,
+                    timeout: 5000,
                     validateStatus: () => true
                 }
             );
@@ -176,7 +197,7 @@ class DiscordUserClient {
                 case 9:
                     this.sessionId = null;
                     this.sequence = null;
-                    setTimeout(() => this.identify(), 1500);
+                    setTimeout(() => this.identify(), 1000);
                     break;
                 case 7:
                     this.ws.close();
@@ -188,8 +209,7 @@ class DiscordUserClient {
             clearInterval(this.heartbeatInterval);
             if (this.reconnectAttempts < 10) {
                 this.reconnectAttempts++;
-                const delay = Math.min(3000 * this.reconnectAttempts, 20000);
-                setTimeout(() => this.connect(messageHandler), delay);
+                setTimeout(() => this.connect(messageHandler), 2000);
             }
         });
 
@@ -212,15 +232,11 @@ class DiscordUserClient {
                 d: {
                     token: this.token,
                     capabilities: 16381,
-                    properties: {
-                        os: 'Linux',
-                        browser: 'Chrome',
-                        device: ''
-                    },
+                    properties: { os: 'Linux', browser: 'Chrome', device: '' },
                     presence: { status: 'online', since: 0, activities: [], afk: false }
                 }
             }));
-        }, Math.random() * 1000 + 300);
+        }, Math.random() * 500 + 200);
     }
 
     resume() {
@@ -240,7 +256,7 @@ let successCount = 0;
 let failCount = 0;
 
 // ===============================================
-// 🚀 Main
+// 🚀 Main (เร็วสุด - ประมวลผลพร้อมกัน)
 // ===============================================
 
 async function main(phone, userToken) {
@@ -248,123 +264,119 @@ async function main(phone, userToken) {
     const client = new DiscordUserClient(userToken);
     const redeemedVouchers = new Set();
 
-    console.log(chalk.magenta(`🔧 Method: PROXY`));
+    console.log(chalk.magenta(`🔧 Method: PROXY (Fast Mode)`));
     console.log(chalk.gray("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
 
     const handleMessage = async (message) => {
         if (message.author?.bot) return;
 
-        // ตรวจสอบข้อความ
+        const processVoucher = async (voucherCode, imageUrl = null, source = '') => {
+            if (!voucherCode || redeemedVouchers.has(voucherCode)) return;
+            
+            redeemedVouchers.add(voucherCode);
+            
+            const detectTime = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
+            const startTime = Date.now();
+            
+            const result = await voucher.redeem(voucherCode);
+            const speed = ((Date.now() - startTime) / 1000).toFixed(2);
+            
+            if (result.success) {
+                console.log(chalk.green(`✅ ${result.amount}฿ ${source}(${speed}s)`));
+                totalEarned += result.amount;
+                successCount++;
+                
+                sendWebhook([{
+                    title: `✅ รีดีมสำเร็จ ${source}`,
+                    color: 0x00ff00,
+                    fields: [
+                        { name: "💰 จำนวน", value: `${result.amount}฿`, inline: true },
+                        { name: "👤 จาก", value: result.ownerName, inline: true },
+                        { name: "⚡ ความเร็ว", value: `${speed}s`, inline: true },
+                        { name: "🎫 Code", value: voucherCode, inline: false },
+                        { name: "⏰ เวลาดัก", value: detectTime, inline: true },
+                        { name: "📊 สถิติ", value: `✅${successCount} ❌${failCount} 💰${totalEarned}฿`, inline: false }
+                    ],
+                    thumbnail: imageUrl ? { url: imageUrl } : undefined,
+                    timestamp: new Date().toISOString()
+                }]);
+            } else {
+                console.log(chalk.red(`❌ ${result.message} ${source}(${speed}s)`));
+                failCount++;
+                
+                sendWebhook([{
+                    title: `❌ รีดีมล้มเหลว ${source}`,
+                    color: 0xff0000,
+                    fields: [
+                        { name: "📝 สาเหตุ", value: result.message, inline: false },
+                        { name: "⚡ ความเร็ว", value: `${speed}s`, inline: true },
+                        { name: "🎫 Code", value: voucherCode, inline: false },
+                        { name: "⏰ เวลาดัก", value: detectTime, inline: true },
+                        { name: "📊 สถิติ", value: `✅${successCount} ❌${failCount} 💰${totalEarned}฿`, inline: false }
+                    ],
+                    thumbnail: imageUrl ? { url: imageUrl } : undefined,
+                    timestamp: new Date().toISOString()
+                }]);
+            }
+        };
+
+        // ตรวจสอบข้อความ (เร็วสุด)
         if (message.content) {
             const voucherCode = voucher.getVoucherCode(message.content);
-            if (voucherCode && !redeemedVouchers.has(voucherCode)) {
-                redeemedVouchers.add(voucherCode);
+            if (voucherCode) {
+                processVoucher(voucherCode, null, '');
+            }
+        }
+
+        // ตรวจสอบรูปภาพทั้งหมดพร้อมกัน (Parallel)
+        const imagePromises = [];
+
+        // Attachments
+        if (message.attachments?.length > 0) {
+            for (const attachment of message.attachments) {
+                const isImage = 
+                    attachment.content_type?.startsWith('image/') ||
+                    attachment.filename?.match(/\.(jpg|jpeg|png|gif|webp|bmp)$/i);
                 
-                const detectTime = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
-                const startTime = Date.now();
-                
-                const result = await voucher.redeem(voucherCode);
-                const speed = ((Date.now() - startTime) / 1000).toFixed(2);
-                
-                if (result.success) {
-                    console.log(chalk.green(`✅ ${result.amount}฿ (${speed}s)`));
-                    totalEarned += result.amount;
-                    successCount++;
-                    
-                    sendWebhook([{
-                        title: "✅ รีดีมสำเร็จ",
-                        color: 0x00ff00,
-                        fields: [
-                            { name: "💰 จำนวน", value: `${result.amount}฿`, inline: true },
-                            { name: "👤 จาก", value: result.ownerName, inline: true },
-                            { name: "⚡ ความเร็ว", value: `${speed}s`, inline: true },
-                            { name: "🎫 Code", value: voucherCode, inline: false },
-                            { name: "⏰ เวลาดัก", value: detectTime, inline: true },
-                            { name: "📊 สถิติ", value: `✅${successCount} ❌${failCount} 💰${totalEarned}฿`, inline: false }
-                        ],
-                        timestamp: new Date().toISOString()
-                    }]);
-                } else {
-                    console.log(chalk.red(`❌ ${result.message} (${speed}s)`));
-                    failCount++;
-                    
-                    sendWebhook([{
-                        title: "❌ รีดีมล้มเหลว",
-                        color: 0xff0000,
-                        fields: [
-                            { name: "📝 สาเหตุ", value: result.message, inline: false },
-                            { name: "⚡ ความเร็ว", value: `${speed}s`, inline: true },
-                            { name: "🎫 Code", value: voucherCode, inline: false },
-                            { name: "⏰ เวลาดัก", value: detectTime, inline: true },
-                            { name: "📊 สถิติ", value: `✅${successCount} ❌${failCount} 💰${totalEarned}฿`, inline: false }
-                        ],
-                        timestamp: new Date().toISOString()
-                    }]);
+                if (isImage) {
+                    imagePromises.push(
+                        getImageFromURL(attachment.url)
+                            .then(decodeQRFromImage)
+                            .then(qr => {
+                                const code = voucher.getVoucherCode(qr);
+                                if (code) processVoucher(code, attachment.url, 'QR ');
+                            })
+                            .catch(() => {})
+                    );
                 }
             }
         }
 
-        // ตรวจสอบรูปภาพ
-        if (message.attachments?.length > 0) {
-            for (const attachment of message.attachments) {
-                if (attachment.content_type?.startsWith('image/')) {
-                    try {
-                        const imageData = await getImageFromURL(attachment.url);
-                        const decodedQR = await decodeQRFromImage(imageData);
-                        const voucherCode = voucher.getVoucherCode(decodedQR);
-
-                        if (voucherCode && !redeemedVouchers.has(voucherCode)) {
-                            redeemedVouchers.add(voucherCode);
-                            
-                            const detectTime = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
-                            const startTime = Date.now();
-                            
-                            const result = await voucher.redeem(voucherCode);
-                            const speed = ((Date.now() - startTime) / 1000).toFixed(2);
-                            
-                            if (result.success) {
-                                console.log(chalk.green(`✅ ${result.amount}฿ QR (${speed}s)`));
-                                totalEarned += result.amount;
-                                successCount++;
-                                
-                                sendWebhook([{
-                                    title: "✅ รีดีมสำเร็จ (QR)",
-                                    color: 0x00ff00,
-                                    fields: [
-                                        { name: "💰 จำนวน", value: `${result.amount}฿`, inline: true },
-                                        { name: "👤 จาก", value: result.ownerName, inline: true },
-                                        { name: "⚡ ความเร็ว", value: `${speed}s`, inline: true },
-                                        { name: "🎫 Code", value: voucherCode, inline: false },
-                                        { name: "⏰ เวลาดัก", value: detectTime, inline: true },
-                                        { name: "📊 สถิติ", value: `✅${successCount} ❌${failCount} 💰${totalEarned}฿`, inline: false }
-                                    ],
-                                    thumbnail: { url: attachment.url },
-                                    timestamp: new Date().toISOString()
-                                }]);
-                            } else {
-                                console.log(chalk.red(`❌ ${result.message} QR (${speed}s)`));
-                                failCount++;
-                                
-                                sendWebhook([{
-                                    title: "❌ รีดีมล้มเหลว (QR)",
-                                    color: 0xff0000,
-                                    fields: [
-                                        { name: "📝 สาเหตุ", value: result.message, inline: false },
-                                        { name: "⚡ ความเร็ว", value: `${speed}s`, inline: true },
-                                        { name: "🎫 Code", value: voucherCode, inline: false },
-                                        { name: "⏰ เวลาดัก", value: detectTime, inline: true },
-                                        { name: "📊 สถิติ", value: `✅${successCount} ❌${failCount} 💰${totalEarned}฿`, inline: false }
-                                    ],
-                                    thumbnail: { url: attachment.url },
-                                    timestamp: new Date().toISOString()
-                                }]);
-                            }
-                        }
-                    } catch (error) {
-                        // Silent
-                    }
+        // Embeds
+        if (message.embeds?.length > 0) {
+            for (const embed of message.embeds) {
+                const urls = [
+                    embed.image?.url,
+                    embed.thumbnail?.url
+                ].filter(Boolean);
+                
+                for (const url of urls) {
+                    imagePromises.push(
+                        getImageFromURL(url)
+                            .then(decodeQRFromImage)
+                            .then(qr => {
+                                const code = voucher.getVoucherCode(qr);
+                                if (code) processVoucher(code, url, 'Embed QR ');
+                            })
+                            .catch(() => {})
+                    );
                 }
             }
+        }
+
+        // รอทุก promise พร้อมกัน (ไม่รอทีละตัว)
+        if (imagePromises.length > 0) {
+            await Promise.allSettled(imagePromises);
         }
     };
 
@@ -380,7 +392,7 @@ console.log(chalk.yellow(`📱 ${phone.replace(/(\d{3})\d{4}(\d{3})/, '$1****$2'
 
 keepAlive();
 
-setTimeout(() => main(phone, userToken), 2000);
+setTimeout(() => main(phone, userToken), 1000);
 
 // Error Handling
 process.on("uncaughtException", () => {});
@@ -390,22 +402,18 @@ process.on('SIGTERM', () => {
     sendWebhook([{
         title: "🔴 Bot หยุดทำงาน",
         color: 0xff0000,
-        fields: [
-            { name: "📊 สถิติสุดท้าย", value: `✅${successCount} ❌${failCount} 💰${totalEarned}฿`, inline: false }
-        ],
+        fields: [{ name: "📊 สถิติสุดท้าย", value: `✅${successCount} ❌${failCount} 💰${totalEarned}฿`, inline: false }],
         timestamp: new Date().toISOString()
     }]);
-    setTimeout(() => process.exit(0), 1000);
+    setTimeout(() => process.exit(0), 500);
 });
 
 process.on('SIGINT', () => {
     sendWebhook([{
         title: "🔴 Bot หยุดทำงาน",
         color: 0xff0000,
-        fields: [
-            { name: "📊 สถิติสุดท้าย", value: `✅${successCount} ❌${failCount} 💰${totalEarned}฿`, inline: false }
-        ],
+        fields: [{ name: "📊 สถิติสุดท้าย", value: `✅${successCount} ❌${failCount} 💰${totalEarned}฿`, inline: false }],
         timestamp: new Date().toISOString()
     }]);
-    setTimeout(() => process.exit(0), 1000);
+    setTimeout(() => process.exit(0), 500);
 });
